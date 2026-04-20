@@ -14,6 +14,13 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+# Git PATH kontrolü
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    $gitPath = "C:\Program Files\Git\cmd"
+    if (Test-Path $gitPath) { $env:PATH += ";$gitPath" }
+    else { Write-Host "  HATA: Git bulunamadi!" -ForegroundColor Red; exit 1 }
+}
+
 Write-Host "`n═══════════════════════════════════════" -ForegroundColor Cyan
 Write-Host "  Relay Yayinlama" -ForegroundColor Cyan
 Write-Host "═══════════════════════════════════════`n" -ForegroundColor Cyan

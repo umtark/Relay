@@ -1,5 +1,5 @@
 ﻿{
-    "version":  "1.0.1",
+    "version":  "1.0.2",
     "date":  "2026-04-20",
     "channel":  "stable",
     "files":  [
@@ -9,5 +9,5 @@
                   "setup_kit/continue_config/config.yaml",
                   "setup_kit/vscode_settings/settings.json"
               ],
-    "changelog":  "Guncelleme bildirimi sohbete eklendi, toast kaldirildi"
+    "changelog":  "Terminal gizli calisiyor (pythonw + reveal never)"
 }
