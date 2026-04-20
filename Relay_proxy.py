@@ -653,6 +653,36 @@ class LocalToolExecutor:
         "new_file": "write_file",
         "edit_file": "replace_in_file",
         "replace_string_in_file": "replace_in_file",
+        "multi_replace_string_in_file": "multi_replace",
+        "single_find_and_replace": "replace_in_file",
+        "find_and_replace": "replace_in_file",
+        "find_replace": "replace_in_file",
+        "str_replace": "replace_in_file",
+        "insert_code": "write_file",
+        "update_file": "replace_in_file",
+        "modify_file": "replace_in_file",
+        "patch_file": "replace_in_file",
+        "code_edit": "replace_in_file",
+        "semantic_search": "grep_search",
+        "search_code": "grep_search",
+        "workspace_search": "grep_search",
+        "search_workspace": "grep_search",
+        "directory_listing": "list_dir",
+        "ls": "list_dir",
+        "dir": "list_dir",
+        "cat": "read_file",
+        "view_file": "read_file",
+        "open_file": "read_file",
+        "show_file": "read_file",
+        "check_syntax": "get_errors",
+        "lint": "deep_check",
+        "validate": "deep_check",
+        "check_errors": "get_errors",
+        "run_shell": "run_command",
+        "shell": "run_command",
+        "exec": "run_command",
+        "bash": "run_command",
+        "powershell": "run_command",
     }
 
     @classmethod
@@ -819,7 +849,7 @@ class LocalToolExecutor:
             if start_line < 1:
                 start_line = 1
             if end_line is None or end_line > total:
-                end_line = min(total, start_line + 499)  # Varsayılan 500 satır
+                end_line = min(total, start_line + 1999)  # Varsayılan 2000 satır
             if end_line > total:
                 end_line = total
 
@@ -1383,14 +1413,19 @@ class LocalToolExecutor:
         ext = os.path.splitext(file_path)[1].lower()
         if ext == '.py':
             import py_compile
+            has_syntax_error = False
             try:
                 py_compile.compile(file_path, doraise=True)
                 results.append("✅ Syntax: Hata yok")
             except py_compile.PyCompileError as e:
+                has_syntax_error = True
                 results.append(f"❌ Syntax hatası: {e}")
 
-            # 2. AST analizi — potansiyel sorunlar
-            try:
+            # 2. AST analizi — potansiyel sorunlar (syntax hatalı dosyada atla)
+            if has_syntax_error:
+                results.append("⚠️ Syntax hatası olduğu için detaylı analiz atlandı. Önce syntax hatasını düzeltin.")
+            else:
+              try:
                 import ast
                 with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                     source = f.read()
@@ -1453,9 +1488,9 @@ class LocalToolExecutor:
                 line_count = len(source.splitlines())
                 results.append(f"📊 İstatistik: {line_count} satır, {func_count} fonksiyon, {class_count} sınıf, {len(imports)} import")
 
-            except SyntaxError:
+              except SyntaxError:
                 pass  # Zaten py_compile yakalamış
-            except Exception as e:
+              except Exception as e:
                 results.append(f"⚠️ AST analizi başarısız: {e}")
 
             # 3. pylint/flake8 varsa çalıştır
@@ -2906,7 +2941,7 @@ class OpenAIHandler(BaseHTTPRequestHandler):
         # ═══ AGENT LOOP — Her zaman araç erişimli çalış ═══
         # Gemini araç gerekmediğini kendisi anlar → ilk iterasyonda cevap verir.
         # Sohbet için ayrı dal KALDIRDIK — keyword bakımı sürdürülemezdi.
-        MAX_TOOL_ITERATIONS = 5  # analyze_file ile 2-3 iterasyon yeterli
+        MAX_TOOL_ITERATIONS = 10  # Karmaşık görevlerde daha fazla iterasyon
         GEMINI_MAX_RETRIES = 2   # Gemini boş/hata dönerse tekrar dene
         final_response = ""
         current_prompt = full_prompt
@@ -3062,6 +3097,44 @@ class OpenAIHandler(BaseHTTPRequestHandler):
         else:
             # Max iterasyon aşıldı
             final_response = response_text if response_text else "Maksimum araç iterasyonu aşıldı."
+
+        # ═══ BOŞ YANIT FALLBACK — araç sonuçlarından özet oluştur ═══
+        if not final_response or not final_response.strip():
+            if all_tool_results:
+                # Önce Gemini'ye araç sonuçlarıyla kısa bir retry yap
+                print(f"  ⚠️  Gemini boş yanıt verdi, araç sonuçlarıyla retry yapılıyor...")
+                retry_prompt = (
+                    f"[System Instruction]: Kullanıcının sorusunu cevapla. "
+                    f"Araç çağrısı YAPMA, sadece metin yanıt yaz.\n\n"
+                    f"[Kullanıcı Sorusu]: {user_question}\n\n"
+                    f"[Araç Sonuçları]:\n"
+                )
+                # Son 3 araç sonucunu ekle (kısa tut)
+                for tr in all_tool_results[-3:]:
+                    retry_prompt += tr[:2000] + "\n\n"
+                retry_prompt += "\nYukarıdaki araç sonuçlarını kullanarak Türkçe yanıt ver. Kısa ve öz ol."
+
+                retry_response = gemini_bridge.ask(retry_prompt)
+                if retry_response and retry_response.strip() and not retry_response.startswith("❌"):
+                    final_response = self._clean_tool_artifacts(retry_response)
+                    print(f"  ✅ Retry başarılı ({len(final_response):,} chr)")
+                else:
+                    # Retry de başarısız — fallback özet oluştur
+                    print(f"  ⚠️  Retry de başarısız, araç sonuçlarından fallback özet oluşturuluyor...")
+                    fallback_parts = []
+                    for tr in all_tool_results:
+                        if any(k in tr for k in ('Değişiklik yapıldı', 'Dosya yazıldı', 'syntax hatası', 'Syntax hatası', 'SYNTAX ERROR', 'AST PARSE ERROR', 'Hata yok')):
+                            fallback_parts.append(tr.split(']:', 1)[-1].strip() if ']:' in tr else tr.strip())
+                    if fallback_parts:
+                        final_response = "Araç sonuçları:\n\n" + "\n\n".join(fallback_parts)
+                    else:
+                        summary_lines = []
+                        for tr in all_tool_results[-5:]:
+                            line = tr.split(']:', 1)[-1].strip() if ']:' in tr else tr.strip()
+                            summary_lines.append(line[:300])
+                        final_response = "İşlem tamamlandı. Sonuçlar:\n\n" + "\n\n".join(summary_lines)
+            else:
+                final_response = "Gemini cevap veremedi. Lütfen tekrar deneyin."
 
         elapsed = time.time() - start
         iter_info = f", {total_tool_calls} araç" if total_tool_calls > 0 else ""
