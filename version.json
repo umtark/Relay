@@ -1,5 +1,5 @@
 {
-    "version":  "1.2.0",
+    "version":  "1.2.1",
     "date":  "2026-04-20",
     "channel":  "stable",
     "files":  [
@@ -10,5 +10,5 @@
                   "setup_kit/continue_config/config.yaml",
                   "setup_kit/vscode_settings/settings.json"
               ],
-    "changelog":  "multi_replace, web_fetch, web_search, run_background, check_background eklendi"
+    "changelog":  "Fallback parser bug fix: f-string parse, oldString/newString sinir algilama, write/replace syntax kontrolu"
 }
