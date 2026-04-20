@@ -172,6 +172,9 @@ ARAÇ SEÇİM KURALLARI:
 11. Çok adımlı görev → todo_add ile plan oluştur, ilerledikçe todo_update
 12. "derin kontrol", "güvenlik kontrolü" → deep_check
 13. Sohbet sonu / önemli karar → save_conversation_summary
+14. Birden fazla dosyada düzenleme → multi_replace (tek seferde)
+15. Hata mesajı anlamak, dokümantasyon okumak → web_search veya web_fetch
+16. Sunucu/watch başlatmak → run_background, durumunu check_background ile sorgula
 
 KURALLAR:
 1. Dosya/kod sorusu geldiğinde MUTLAKA araç kullan, TAHMİN ETME
@@ -228,7 +231,7 @@ class LocalToolExecutor:
     def _get_cached(cls, tool_name: str, arguments: dict) -> str | None:
         """Cache'ten sonuç getir (varsa ve TTL geçmemişse)."""
         # Sadece okuma araçları cache'lenir (yazma/çalıştırma değil)
-        if tool_name in ('write_file', 'replace_in_file', 'run_command'):
+        if tool_name in ('write_file', 'replace_in_file', 'run_command', 'multi_replace', 'run_background', 'check_background'):
             return None
         key = cls._cache_key(tool_name, arguments)
         if key in cls._cache:
@@ -243,7 +246,7 @@ class LocalToolExecutor:
     @classmethod
     def _set_cached(cls, tool_name: str, arguments: dict, result: str):
         """Sonucu cache'e yaz."""
-        if tool_name in ('write_file', 'replace_in_file', 'run_command'):
+        if tool_name in ('write_file', 'replace_in_file', 'run_command', 'multi_replace', 'run_background', 'check_background'):
             return
         key = cls._cache_key(tool_name, arguments)
         cls._cache[key] = result
@@ -535,6 +538,93 @@ class LocalToolExecutor:
                 }
             }
         },
+        # ═══ ÇOKLU DÜZENLEME ═══
+        {
+            "type": "function",
+            "function": {
+                "name": "multi_replace",
+                "description": "Birden fazla dosyada veya aynı dosyada birden fazla değişiklik yap — tek seferde. Her replacement: {filePath, oldString, newString}",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "replacements": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "filePath": {"type": "string"},
+                                    "oldString": {"type": "string"},
+                                    "newString": {"type": "string"}
+                                },
+                                "required": ["filePath", "oldString", "newString"]
+                            },
+                            "description": "Değişiklik listesi"
+                        }
+                    },
+                    "required": ["replacements"]
+                }
+            }
+        },
+        # ═══ WEB ERİŞİMİ ═══
+        {
+            "type": "function",
+            "function": {
+                "name": "web_fetch",
+                "description": "URL'den web sayfası içeriğini çek. Dokümantasyon, API referans, Stack Overflow cevapları okumak için.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "Çekilecek URL"},
+                        "query": {"type": "string", "description": "Sayfada aranacak konu (sonuçları filtrelemek için)"}
+                    },
+                    "required": ["url"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Google'da arama yap ve sonuçları getir. Teknik sorular, hata mesajları, kütüphane kullanımı araştırmak için.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Arama sorgusu"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        # ═══ ARKA PLAN KOMUT ═══
+        {
+            "type": "function",
+            "function": {
+                "name": "run_background",
+                "description": "Uzun süren komutu arka planda başlat (sunucu, watch modu vb). Hemen döner, sonucu daha sonra kontrol edebilirsin.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {"type": "string", "description": "Çalıştırılacak komut"},
+                        "label": {"type": "string", "description": "Bu process'e verilen isim (sonra kontrol için)"}
+                    },
+                    "required": ["command"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "check_background",
+                "description": "Arka planda çalışan bir process'in çıktısını kontrol et",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string", "description": "Process etiketi (run_background'da verilen)"}
+                    },
+                    "required": ["label"]
+                }
+            }
+        },
     ]
 
     # Dosya okurken atlanacak binary uzantılar
@@ -596,6 +686,11 @@ class LocalToolExecutor:
                 "todo_list": cls._todo_list,
                 "deep_check": cls._deep_check,
                 "save_conversation_summary": cls._save_conversation_summary,
+                "multi_replace": cls._multi_replace,
+                "web_fetch": cls._web_fetch,
+                "web_search": cls._web_search,
+                "run_background": cls._run_background,
+                "check_background": cls._check_background,
             }.get(tool_name)
             if not handler:
                 return f"Bilinmeyen araç: {tool_name}"
@@ -642,7 +737,7 @@ class LocalToolExecutor:
             return results
 
         # Yazma araçları sıralı çalışmalı, okuma araçları paralel çalışabilir
-        write_tools = {'write_file', 'replace_in_file', 'run_command'}
+        write_tools = {'write_file', 'replace_in_file', 'run_command', 'multi_replace', 'run_background'}
         read_calls = []
         write_calls = []
         call_order = []  # Orijinal sırayı koru
@@ -1355,6 +1450,218 @@ class LocalToolExecutor:
                 results.append("⚠️ Dosya boş!")
 
         return "\n".join(results) if results else "Kontrol tamamlandı, sorun bulunamadı."
+
+    # ═══ ÇOKLU DÜZENLEME ═══
+
+    @classmethod
+    def _multi_replace(cls, args: dict) -> str:
+        """Birden fazla replace_in_file işlemini tek seferde çalıştır."""
+        replacements = args.get("replacements", [])
+        if not replacements:
+            return "⚠️ Değişiklik listesi boş."
+
+        results = []
+        success = 0
+        fail = 0
+        for i, rep in enumerate(replacements, 1):
+            fp = rep.get("filePath", "")
+            old = rep.get("oldString", "")
+            new = rep.get("newString", "")
+            r = cls._replace_in_file({"filePath": fp, "oldString": old, "newString": new})
+            if "✅" in r or "başarıyla" in r.lower():
+                success += 1
+                results.append(f"✅ #{i} {os.path.basename(fp)}")
+            else:
+                fail += 1
+                results.append(f"❌ #{i} {os.path.basename(fp)}: {r}")
+        
+        summary = f"\n📊 Toplam: {success} başarılı, {fail} başarısız"
+        return "\n".join(results) + summary
+
+    # ═══ WEB ERİŞİMİ ═══
+
+    _BACKGROUND_PROCS: dict = {}  # {label: {"proc": Popen, "output": str}}
+
+    @classmethod
+    def _web_fetch(cls, args: dict) -> str:
+        """URL'den web sayfası içeriğini çek ve temizle."""
+        import urllib.request
+        import urllib.error
+        url = args.get("url", "")
+        query = args.get("query", "")
+
+        if not url:
+            return "⚠️ URL belirtilmedi."
+
+        # Basit güvenlik kontrolü
+        if not url.startswith(("http://", "https://")):
+            return "⚠️ Yalnızca http:// veya https:// URL'leri desteklenir."
+
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/json,text/plain",
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                content_type = resp.headers.get("Content-Type", "")
+                raw = resp.read(500_000)  # Max 500KB
+
+                # JSON ise direkt döndür
+                if "json" in content_type:
+                    return raw.decode("utf-8", errors="replace")[:30_000]
+
+                # HTML'i temizle
+                text = raw.decode("utf-8", errors="replace")
+                text = cls._clean_html(text)
+
+                # Query varsa ilgili kısımları filtrele
+                if query and len(text) > 5000:
+                    lines = text.splitlines()
+                    relevant = []
+                    query_lower = query.lower()
+                    for i, line in enumerate(lines):
+                        if query_lower in line.lower():
+                            start = max(0, i - 2)
+                            end = min(len(lines), i + 5)
+                            relevant.extend(lines[start:end])
+                            relevant.append("---")
+                    if relevant:
+                        text = "\n".join(relevant[:200])
+
+                # Uzunluk limiti
+                if len(text) > 30_000:
+                    text = text[:30_000] + "\n\n[... kırpıldı ...]"
+                return text if text.strip() else "⚠️ Sayfa içeriği boş veya okunamadı."
+        except urllib.error.HTTPError as e:
+            return f"⚠️ HTTP hatası: {e.code} {e.reason}"
+        except urllib.error.URLError as e:
+            return f"⚠️ Bağlantı hatası: {e.reason}"
+        except Exception as e:
+            return f"⚠️ Hata: {e}"
+
+    @staticmethod
+    def _clean_html(html: str) -> str:
+        """HTML'den script/style/tag'leri temizle, düz metin çıkar."""
+        import re as _re
+        # Script ve style bloklarını kaldır
+        html = _re.sub(r'<script[^>]*>.*?</script>', '', html, flags=_re.DOTALL | _re.IGNORECASE)
+        html = _re.sub(r'<style[^>]*>.*?</style>', '', html, flags=_re.DOTALL | _re.IGNORECASE)
+        html = _re.sub(r'<nav[^>]*>.*?</nav>', '', html, flags=_re.DOTALL | _re.IGNORECASE)
+        html = _re.sub(r'<footer[^>]*>.*?</footer>', '', html, flags=_re.DOTALL | _re.IGNORECASE)
+        html = _re.sub(r'<header[^>]*>.*?</header>', '', html, flags=_re.DOTALL | _re.IGNORECASE)
+        # HTML entity'leri
+        html = html.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+        html = html.replace('&quot;', '"').replace('&#39;', "'")
+        # Tag'leri kaldır
+        html = _re.sub(r'<[^>]+>', ' ', html)
+        # Çoklu boşlukları temizle
+        html = _re.sub(r'[ \t]+', ' ', html)
+        html = _re.sub(r'\n\s*\n', '\n\n', html)
+        return html.strip()
+
+    @classmethod
+    def _web_search(cls, args: dict) -> str:
+        """Google'da arama yap (DuckDuckGo HTML üzerinden)."""
+        import urllib.request
+        import urllib.parse
+        import re as _re
+        query = args.get("query", "")
+        if not query:
+            return "⚠️ Arama sorgusu belirtilmedi."
+
+        # DuckDuckGo HTML arama (API key gerektirmez)
+        encoded = urllib.parse.quote_plus(query)
+        url = f"https://html.duckduckgo.com/html/?q={encoded}"
+
+        try:
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                html = resp.read(200_000).decode("utf-8", errors="replace")
+
+            # Sonuçları parse et
+            results = []
+            # DuckDuckGo result pattern
+            snippets = _re.findall(
+                r'<a[^>]+class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?<a[^>]+class="result__snippet"[^>]*>(.*?)</a>',
+                html, _re.DOTALL
+            )
+            if not snippets:
+                # Alternatif pattern
+                snippets = _re.findall(
+                    r'class="result__url"[^>]*>[^<]*<[^>]*href="([^"]*)"[^>]*>(.*?)</a>.*?class="result__snippet"[^>]*>(.*?)</a>',
+                    html, _re.DOTALL
+                )
+
+            for href, title, snippet in snippets[:8]:
+                title_clean = _re.sub(r'<[^>]+>', '', title).strip()
+                snippet_clean = _re.sub(r'<[^>]+>', '', snippet).strip()
+                # DuckDuckGo redirect URL'sini çöz
+                if '//' in href and 'duckduckgo' not in href:
+                    real_url = href
+                else:
+                    match = _re.search(r'uddg=([^&]+)', href)
+                    real_url = urllib.parse.unquote(match.group(1)) if match else href
+                results.append(f"**{title_clean}**\n{real_url}\n{snippet_clean}\n")
+
+            if results:
+                return f"🔍 \"{query}\" için {len(results)} sonuç:\n\n" + "\n".join(results)
+            return f"⚠️ \"{query}\" için sonuç bulunamadı."
+        except Exception as e:
+            return f"⚠️ Arama hatası: {e}"
+
+    # ═══ ARKA PLAN PROCESS ═══
+
+    @classmethod
+    def _run_background(cls, args: dict) -> str:
+        """Komutu arka planda başlat."""
+        command = args.get("command", "")
+        label = args.get("label", f"bg_{len(cls._BACKGROUND_PROCS) + 1}")
+
+        if not command:
+            return "⚠️ Komut belirtilmedi."
+
+        try:
+            proc = subprocess.Popen(
+                ["powershell", "-NoProfile", "-Command", command],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, cwd=cls.WORKSPACE_DIR
+            )
+            cls._BACKGROUND_PROCS[label] = {"proc": proc, "started": time.time()}
+            return f"✅ Arka plan process başlatıldı: '{label}' (PID: {proc.pid})"
+        except Exception as e:
+            return f"⚠️ Başlatma hatası: {e}"
+
+    @classmethod
+    def _check_background(cls, args: dict) -> str:
+        """Arka plan process'in durumunu ve çıktısını kontrol et."""
+        label = args.get("label", "")
+        if label not in cls._BACKGROUND_PROCS:
+            active = ", ".join(cls._BACKGROUND_PROCS.keys()) if cls._BACKGROUND_PROCS else "yok"
+            return f"⚠️ '{label}' bulunamadı. Aktif process'ler: {active}"
+
+        info = cls._BACKGROUND_PROCS[label]
+        proc = info["proc"]
+        elapsed = time.time() - info["started"]
+
+        # Çıktıyı non-blocking oku
+        output_lines = []
+        try:
+            import select
+            while proc.stdout and proc.stdout.readable():
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                output_lines.append(line.rstrip())
+                if len(output_lines) > 50:
+                    break
+        except Exception:
+            pass
+
+        status = "çalışıyor" if proc.poll() is None else f"bitti (kod: {proc.returncode})"
+        output = "\n".join(output_lines[-30:]) if output_lines else "(henüz çıktı yok)"
+        return f"📋 '{label}' — {status} ({elapsed:.0f}s)\n{output}"
 
 
 def _get_chrome_version() -> str:
