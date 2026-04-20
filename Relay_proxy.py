@@ -2740,10 +2740,13 @@ def main():
     parser.add_argument("--port", type=int, default=5001, help="Sunucu portu (varsayılan: 5001)")
     parser.add_argument("--visible", action="store_true", help="Tarayıcıyı göster (debug için)")
     parser.add_argument("--no-update", action="store_true", help="Güncelleme kontrolünü atla")
+    parser.add_argument("--update-msg", type=str, default=None, help="Restart sonrası güncelleme mesajı")
     args = parser.parse_args()
 
     # ═══ OTOMATİK GÜNCELLEME ═══
     global _pending_update_msg
+    if args.update_msg:
+        _pending_update_msg = args.update_msg
     if not args.no_update:
         try:
             from relay_updater import check_and_update, notify_owner
@@ -2752,11 +2755,12 @@ def main():
                 old_v = update_result.get("old_version", "?")
                 new_v = update_result.get("new_version", "?")
                 changelog = update_result.get("changelog", "")
-                _pending_update_msg = f"v{old_v} → v{new_v}. Değişiklik: {changelog}"
+                msg = f"v{old_v} → v{new_v}. Değişiklik: {changelog}"
+                _pending_update_msg = msg
                 if "Relay_proxy.py" in str(update_result.get("files", [])):
                     print("  🔄 Proxy güncellendi, yeniden başlatılıyor...")
                     notify_owner("Güncelleme uygulandı")
-                    os.execv(sys.executable, [sys.executable] + sys.argv + ["--no-update"])
+                    os.execv(sys.executable, [sys.executable] + sys.argv + ["--no-update", "--update-msg", msg])
             # İlk çalıştırmada bildirim
             notify_owner("Relay başlatıldı")
         except ImportError:

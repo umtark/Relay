@@ -1,5 +1,5 @@
 {
-    "version":  "1.0.3",
+    "version":  "1.0.4",
     "date":  "2026-04-20",
     "channel":  "stable",
     "files":  [
@@ -9,5 +9,5 @@
                   "setup_kit/continue_config/config.yaml",
                   "setup_kit/vscode_settings/settings.json"
               ],
-    "changelog":  "BOM fix - auto updater encoding duzeltmesi"
+    "changelog":  "Guncelleme bildirimi restart sonrasi korunuyor"
 }
