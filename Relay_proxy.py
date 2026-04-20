@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Relay Ver 1.0 Proxy - VS Code Continue için Sınırsız AI
 =====================================================
@@ -91,7 +91,7 @@ Workspace: {workspace_dir}
 - Basit soru/selam → kısa, samimi cevap (1-3 cümle)
 - Dosya/kod sorusu → MUTLAKA araç kullan, anlat
 - Teknik/derin soru → adım adım analiz, kod örnekleri
-- Hata ayıklama → önce get_errors veya deep_check, sonra çözüm öner
+- Hata ayıklama → önce get_errors veya deep_check ile hataları bul, SONRA read_file ile ilgili satırı oku, SONRA replace_in_file ile DOĞRUDAN DÜZELT — sadece öneri yapma, kendiliğinden düzelt!
 - Kod yazma → çalışan kod + kısa açıklama
 - Birden fazla dosyayı ilgilendiren soru → multi_grep ile hızlı bağlam topla
 - Çok adımlı görev → todo_add ile plan yap, ilerledikçe todo_update ile güncelle
@@ -162,7 +162,7 @@ ARAÇ SEÇİM KURALLARI:
 1. "incele", "analiz et", "ne yapıyor", "nasıl çalışıyor" → analyze_file
 2. "satır X-Y göster", "belirli kısım oku" → read_file
 3. "bul", "ara", "nerede" → grep_search
-4. "hata var mı", "kontrol et", "syntax" → get_errors
+4. "hata var mı", "kontrol et", "syntax", "hataları düzelt", "düzelt" → get_errors ile hataları bul, hata varsa read_file ile kod oku, replace_in_file ile DÜZELT (onay bekleme)
 5. Birden fazla şeyi aynı anda aramak → multi_grep
 6. Dosya içeriği sorusu → ÖNCE analyze_file, detay lazımsa SONRA read_file
 7. Kod düzenleme → ÖNCE read_file ile mevcut kodu oku, SONRA replace_in_file
@@ -1290,17 +1290,28 @@ class LocalToolExecutor:
             except Exception as e:
                 errors.append(f"Syntax check hatası: {e}")
 
-            # 2) Basit lint — tanımsız import, kullanılmayan import kontrolü
+            # 2) Pyflakes lint — tanımsız isimler, kullanılmayan import vb.
             try:
                 result = subprocess.run(
-                    ['python', '-c', f'import ast; ast.parse(open(r"{file_path}", encoding="utf-8").read())'],
+                    ['python', '-m', 'pyflakes', file_path],
                     capture_output=True, text=True, timeout=10,
                     cwd=cls.WORKSPACE_DIR
                 )
-                if result.returncode != 0:
-                    errors.append(f"[AST PARSE ERROR]:\n{result.stderr.strip()}")
+                lint_out = (result.stdout + result.stderr).strip()
+                if lint_out:
+                    errors.append(f"[LINT (pyflakes)]:\n{lint_out}")
             except Exception:
-                pass
+                # pyflakes yoksa AST ile devam et
+                try:
+                    result = subprocess.run(
+                        ['python', '-c', f'import ast; ast.parse(open(r"{file_path}", encoding="utf-8").read())'],
+                        capture_output=True, text=True, timeout=10,
+                        cwd=cls.WORKSPACE_DIR
+                    )
+                    if result.returncode != 0:
+                        errors.append(f"[AST PARSE ERROR]:\n{result.stderr.strip()}")
+                except Exception:
+                    pass
 
         # 3) JavaScript/TypeScript basit syntax kontrolü
         elif file_path.endswith(('.js', '.ts', '.jsx', '.tsx')):
@@ -2156,6 +2167,112 @@ class GeminiBridge:
             print(f"  ❌ Tarayıcı hatası: {e}")
             return False
 
+    def ask_streaming(self, question: str, timeout: int = 300, new_chat: bool = True):
+        """Gemini'ye soru sor, DOM polling ile gerçek zamanlı metin delta'larını yield et."""
+        if self._recovering:
+            for _ in range(60):
+                time.sleep(0.5)
+                if not self._recovering:
+                    break
+
+        with self._lock:
+            if not self._ready or not self._is_driver_alive():
+                if self.driver and self._is_driver_alive():
+                    try:
+                        self.driver.get(GEMINI_URL)
+                        time.sleep(5)
+                        if self._find_input_area():
+                            self._ready = True
+                            self._last_response_count = len(self._get_response_elements())
+                    except Exception:
+                        if not self.start():
+                            yield "ERR:Gemini baslatilamadi"; return
+                else:
+                    if not self.start():
+                        yield "ERR:Gemini baslatilamadi"; return
+
+            try:
+                self._request_count += 1
+                if new_chat and self._request_count > 1:
+                    self._try_new_chat()
+
+                input_area = self._find_input_area()
+                if not input_area:
+                    try:
+                        self.driver.refresh(); time.sleep(4)
+                    except Exception:
+                        pass
+                    input_area = self._find_input_area()
+                    if not input_area:
+                        yield "ERR:Input bulunamadi"; return
+
+                initial_count = len(self._get_response_elements())
+
+                try:
+                    input_area.click(); time.sleep(0.1)
+                    input_area.send_keys(Keys.CONTROL + "a")
+                    input_area.send_keys(Keys.DELETE); time.sleep(0.1)
+                except Exception:
+                    pass
+
+                CHUNK_SIZE = 30_000
+                if len(question) > CHUNK_SIZE:
+                    self.driver.execute_script("arguments[0].focus(); arguments[0].innerText = '';", input_area)
+                    for i in range(0, len(question), CHUNK_SIZE):
+                        self.driver.execute_script("arguments[0].innerText += arguments[1];", input_area, question[i:i+CHUNK_SIZE])
+                        time.sleep(0.1)
+                    self.driver.execute_script(
+                        "var e=arguments[0]; e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true}));",
+                        input_area)
+                else:
+                    self.driver.execute_script(
+                        "var e=arguments[0]; e.focus(); e.innerText=arguments[1]; "
+                        "e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true}));",
+                        input_area, question)
+                time.sleep(0.2)
+
+                send_btn = self._find_send_button()
+                if send_btn:
+                    try: send_btn.click()
+                    except Exception: self.driver.execute_script("arguments[0].click();", send_btn)
+                else:
+                    input_area.send_keys(Keys.RETURN)
+
+                # DOM POLLING — Gemini yazarken gercek zamanli delta gonder
+                start_time = time.time()
+                sent_len = 0
+                last_text = ""
+                stable_count = 0
+
+                while time.time() - start_time < timeout:
+                    try:
+                        responses = self._get_response_elements()
+                        if len(responses) > initial_count:
+                            latest = responses[-1]
+                            current_text = self._extract_clean_text(latest)
+                            if current_text and len(current_text) > sent_len:
+                                delta = current_text[sent_len:]
+                                sent_len = len(current_text)
+                                last_text = current_text
+                                yield delta
+                            if not self._is_generating():
+                                if current_text == last_text:
+                                    stable_count += 1
+                                    if stable_count >= 3:
+                                        break
+                                else:
+                                    last_text = current_text
+                                    stable_count = 0
+                            else:
+                                stable_count = 0
+                        time.sleep(0.15)
+                    except Exception:
+                        time.sleep(0.2)
+
+                self._last_response_count = len(self._get_response_elements())
+            except Exception as e:
+                yield f"ERR:{e}"
+
     def ask(self, question: str, timeout: int = 300, new_chat: bool = True) -> str:
         """Gemini'ye soru sor, cevap al. new_chat=False ise aynı sohbette devam eder."""
         # Arka plan recovery devam ediyorsa bitmesini bekle (max 30sn)
@@ -2938,6 +3055,8 @@ class OpenAIHandler(BaseHTTPRequestHandler):
         relay_prompt = RELAY_IDENTITY_PROMPT.format(workspace_dir=BASE_DIR) + "\n" + RELAY_TOOL_RULES.format(workspace_dir=BASE_DIR)
         tool_prompt_text = self._build_tool_prompt(LocalToolExecutor.TOOL_DEFINITIONS)
 
+        stream = data.get("stream", False)  # Streaming modu agent loop içinde de kullanılır
+
         # ═══ AGENT LOOP — Her zaman araç erişimli çalış ═══
         # Gemini araç gerekmediğini kendisi anlar → ilk iterasyonda cevap verir.
         # Sohbet için ayrı dal KALDIRDIK — keyword bakımı sürdürülemezdi.
@@ -2947,6 +3066,7 @@ class OpenAIHandler(BaseHTTPRequestHandler):
         current_prompt = full_prompt
         total_tool_calls = 0
         all_tool_results = []  # Tüm iterasyonların araç sonuçlarını biriktir
+        streaming_final_prompt = None  # Stream modunda son prompt buraya kaydedilir
 
         for iteration in range(MAX_TOOL_ITERATIONS + 1):
             # ═══ GEMİNİ ÇAĞRISI — retry ile ═══
@@ -2968,10 +3088,28 @@ class OpenAIHandler(BaseHTTPRequestHandler):
             tool_calls_parsed = self._parse_tool_calls(response_text)
 
             if not tool_calls_parsed:
-                # İlk iterasyonda araç kullanmadı — dosya/kod sorusuysa dürt (nudge)
+                # Dosya/kod değişikliği gereken bir cevap araçsız geldi mi kontrol et
+                action_keywords = ['düzelt', 'duzelt', 'fix', 'değiştir', 'degistir', 'sil', 'ekle', 'güncelle', 'guncelle']
+                user_wants_action = any(kw in user_text_lower for kw in action_keywords)
+                file_match = re.search(r'[\w\-]+\.(?:py|js|ts|json|yaml|yml|md|txt|html|css|sh|bat|ps1|ipynb)', user_text_lower)
+
+                # Araçsız geldi ama eylem bekleniyor → nudge yap (ilk 2 iterasyon)
+                if (file_match or user_wants_action) and iteration < 2:
+                    print(f"  ⚠️  Gemini araç kullanmadı (iterasyon {iteration+1}), nudge yapılıyor...")
+                    nudge = (
+                        f"[System Instruction]: ÖNCEKİ CEVABIN GEÇERSİZ! Kullanıcı dosya üzerinde işlem istiyor. "
+                        f"SADECE araç çağrısı yaz, metin açıklama YAZMA!\n"
+                        f"Adımlar: 1) get_errors ile hataları bul, 2) read_file ile kodu oku, 3) replace_in_file ile DÜZELT\n"
+                        f"Workspace: {BASE_DIR}\n\n"
+                        f"[Kullanıcı Sorusu]: {user_question}\n\n"
+                        f"[System Instruction]: {relay_prompt}\n{tool_prompt_text}\n\n"
+                        f"HEMEN araç çağrısı yap!"
+                    )
+                    current_prompt = nudge
+                    continue
+
+                # İlk iterasyonda araç kullanmadı — dosya sorusuysa genel nudge
                 if iteration == 0 and response_text:
-                    # Dosya adı geçiyor mu? (güçlü sinyal)
-                    file_match = re.search(r'[\w\-]+\.(?:py|js|ts|json|yaml|yml|md|txt|html|css|sh|bat|ps1|ipynb)', user_text_lower)
                     # veya önceki asistan mesajında araç kullanımı ima edilmiş mi?
                     prev_assistant_hinted = False
                     for msg in reversed(messages):
@@ -3005,7 +3143,12 @@ class OpenAIHandler(BaseHTTPRequestHandler):
                         current_prompt = nudge
                         continue  # Bir iterasyon daha dene
                 # Araç çağrısı yok → final cevap
-                final_response = response_text
+                if stream:
+                    # Streaming modunda son prompt'u kaydet, ask_streaming ile gerçek zamanlı gönder
+                    streaming_final_prompt = current_prompt
+                    final_response = response_text  # fallback için tut
+                else:
+                    final_response = response_text
                 break
 
             # ═══ ARAÇLARI YEREL OLARAK ÇALIŞTIR (PARALEL) ═══
@@ -3095,8 +3238,9 @@ class OpenAIHandler(BaseHTTPRequestHandler):
             print(f"  🔄 İterasyon {iteration + 2} prompt: {len(current_prompt):,} chr ({len(all_tool_results)} araç sonucu)")
 
         else:
-            # Max iterasyon aşıldı
-            final_response = response_text if response_text else "Maksimum araç iterasyonu aşıldı."
+            # Max iterasyon aşıldı — araç sonuçları varsa boş bırakma
+            print(f"  ⚠️  Maksimum iterasyon ({MAX_TOOL_ITERATIONS}) aşıldı.")
+            final_response = ""  # boş yanıt fallback'ini tetikle
 
         # ═══ BOŞ YANIT FALLBACK — araç sonuçlarından özet oluştur ═══
         if not final_response or not final_response.strip():
@@ -3152,7 +3296,6 @@ class OpenAIHandler(BaseHTTPRequestHandler):
         print(f"  ✅ Cevap ({len(final_response):,} chr, {elapsed:.1f}s{iter_info})")
 
         # ═══ YANITI CONTINUE'A GÖNDER ═══
-        stream = data.get("stream", False)
 
         if stream:
             self.send_response(200)
@@ -3165,31 +3308,38 @@ class OpenAIHandler(BaseHTTPRequestHandler):
             try:
                 chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
 
-                # ═══ GERÇEK STREAMING — kelime seviyesinde parçalar ═══
-                # Cevabı kelime gruplarına böl, her birini SSE event olarak gönder
-                CHUNK_SIZE = 8  # Her seferde ~8 kelime gönder
-                words = final_response.split(' ')
-
-                for i in range(0, len(words), CHUNK_SIZE):
-                    chunk_words = words[i:i + CHUNK_SIZE]
-                    chunk_text = ' '.join(chunk_words)
-                    # İlk parça değilse başına boşluk ekle
-                    if i > 0:
-                        chunk_text = ' ' + chunk_text
-
+                def _send_chunk(text: str):
                     chunk_data = {
                         "id": chat_id,
                         "object": "chat.completion.chunk",
                         "created": int(time.time()),
                         "model": "relay-v1",
-                        "choices": [{
-                            "index": 0,
-                            "delta": {"content": chunk_text},
-                            "finish_reason": None,
-                        }],
+                        "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
                     }
                     self.wfile.write(f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n\n".encode("utf-8"))
                     self.wfile.flush()
+
+                if streaming_final_prompt:
+                    # ═══ GERÇEK DOM STREAMING — Gemini yazarken anında gönder ═══
+                    print("  🌊 DOM streaming başlatılıyor...")
+                    full_streamed = []
+                    for delta in gemini_bridge.ask_streaming(streaming_final_prompt):
+                        if delta:
+                            _send_chunk(delta)
+                            full_streamed.append(delta)
+                    # final_response'u güncelle (araç döngüsü için)
+                    if full_streamed:
+                        final_response = "".join(full_streamed)
+                else:
+                    # ═══ FALLBACK — final_response hazırsa kelime kelime gönder ═══
+                    words = final_response.split(' ')
+                    CHUNK_SIZE = 8
+                    for i in range(0, len(words), CHUNK_SIZE):
+                        chunk_words = words[i:i + CHUNK_SIZE]
+                        chunk_text = ' '.join(chunk_words)
+                        if i > 0:
+                            chunk_text = ' ' + chunk_text
+                        _send_chunk(chunk_text)
 
                 # Final chunk — stop
                 done_data = {

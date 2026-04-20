@@ -11,5 +11,5 @@ def selamla(isim="Ümit Arik"):
     print(mesaj)
     print("-" * len(mesaj))
 
-if name == "main":
-    selamla()", "filePath": "C:\Users\Administrator\Desktop\Relay Dev\umit_relay.py
+if __name__ == "__main__":
+    selamla()
