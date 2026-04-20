@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Relay Ver 1.0 Proxy - VS Code Continue için Sınırsız AI
 =====================================================
@@ -26,6 +26,7 @@ import subprocess
 import threading
 import argparse
 import re
+from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Windows cp1254 emoji encoding fix
@@ -754,7 +755,12 @@ class LocalToolExecutor:
 
     @classmethod
     def execute_parallel(cls, tool_calls: list) -> list:
-        """Birden fazla aracı paralel çalıştır. Bağımsız okuma araçları eşzamanlı çalışır."""
+        """Araçları sıra-semantiğini koruyarak çalıştır.
+
+        Okuma araçları, iki yazma aracı arasındaki bloklarda paralel çalışır.
+        Yazma araçları (ve shell komutları) her zaman sıralı yürütülür.
+        Böylece "write -> read" sırası bozulmaz.
+        """
         if len(tool_calls) <= 1:
             # Tek araç — paralel gereksiz
             results = []
@@ -768,55 +774,50 @@ class LocalToolExecutor:
                 results.append((func_name, result))
             return results
 
-        # Yazma araçları sıralı çalışmalı, okuma araçları paralel çalışabilir
+        # Yazma araçları sıralı çalışmalı, okuma araçları bariyerler arasında paralel çalışabilir
         write_tools = {'write_file', 'replace_in_file', 'run_command', 'multi_replace', 'run_background'}
-        read_calls = []
-        write_calls = []
-        call_order = []  # Orijinal sırayı koru
-
-        for i, tc in enumerate(tool_calls):
-            func_name = tc["function"]["name"]
-            # Alias çöz
-            func_name = cls.TOOL_ALIASES.get(func_name, func_name)
-            if func_name in write_tools:
-                write_calls.append((i, tc))
-                call_order.append(('write', i))
-            else:
-                read_calls.append((i, tc))
-                call_order.append(('read', i))
-
         results_dict = {}
 
-        # 1) Okuma araçlarını paralel çalıştır
-        if read_calls:
-            with ThreadPoolExecutor(max_workers=min(4, len(read_calls))) as executor:
+        def _flush_read_batch(read_batch):
+            if not read_batch:
+                return
+            with ThreadPoolExecutor(max_workers=min(4, len(read_batch))) as executor:
                 futures = {}
-                for idx, tc in read_calls:
-                    func_name = cls.TOOL_ALIASES.get(tc["function"]["name"], tc["function"]["name"])
+                for idx, tc in read_batch:
+                    fn = cls.TOOL_ALIASES.get(tc["function"]["name"], tc["function"]["name"])
                     try:
-                        func_args = json.loads(tc["function"]["arguments"])
+                        fa = json.loads(tc["function"].get("arguments", "{}"))
                     except (json.JSONDecodeError, TypeError):
-                        func_args = {}
-                    future = executor.submit(cls.execute, func_name, func_args)
-                    futures[future] = (idx, func_name)
+                        fa = {}
+                    futures[executor.submit(cls.execute, fn, fa)] = (idx, fn)
 
                 for future in as_completed(futures):
-                    idx, func_name = futures[future]
+                    idx, fn = futures[future]
                     try:
                         result = future.result(timeout=60)
                     except Exception as e:
-                        result = f"Araç hatası ({func_name}): {e}"
-                    results_dict[idx] = (func_name, result)
+                        result = f"Araç hatası ({fn}): {e}"
+                    results_dict[idx] = (fn, result)
 
-        # 2) Yazma araçlarını sıralı çalıştır
-        for idx, tc in write_calls:
+        read_batch = []
+        for idx, tc in enumerate(tool_calls):
             func_name = cls.TOOL_ALIASES.get(tc["function"]["name"], tc["function"]["name"])
-            try:
-                func_args = json.loads(tc["function"]["arguments"])
-            except (json.JSONDecodeError, TypeError):
-                func_args = {}
-            result = cls.execute(func_name, func_args)
-            results_dict[idx] = (func_name, result)
+            if func_name in write_tools:
+                # write bariyeri: önce biriken tüm read'leri bitir
+                _flush_read_batch(read_batch)
+                read_batch = []
+
+                try:
+                    func_args = json.loads(tc["function"].get("arguments", "{}"))
+                except (json.JSONDecodeError, TypeError):
+                    func_args = {}
+                result = cls.execute(func_name, func_args)
+                results_dict[idx] = (func_name, result)
+            else:
+                read_batch.append((idx, tc))
+
+        # Son read bloğunu çalıştır
+        _flush_read_batch(read_batch)
 
         # Orijinal sıraya göre döndür
         return [results_dict[i] for i in range(len(tool_calls))]
@@ -1281,7 +1282,7 @@ class LocalToolExecutor:
         if file_path.endswith('.py'):
             try:
                 result = subprocess.run(
-                    ['python', '-m', 'py_compile', file_path],
+                    [sys.executable, '-m', 'py_compile', file_path],
                     capture_output=True, text=True, timeout=15,
                     cwd=cls.WORKSPACE_DIR
                 )
@@ -1293,7 +1294,7 @@ class LocalToolExecutor:
             # 2) Pyflakes lint — tanımsız isimler, kullanılmayan import vb.
             try:
                 result = subprocess.run(
-                    ['python', '-m', 'pyflakes', file_path],
+                    [sys.executable, '-m', 'pyflakes', file_path],
                     capture_output=True, text=True, timeout=10,
                     cwd=cls.WORKSPACE_DIR
                 )
@@ -1304,7 +1305,7 @@ class LocalToolExecutor:
                 # pyflakes yoksa AST ile devam et
                 try:
                     result = subprocess.run(
-                        ['python', '-c', f'import ast; ast.parse(open(r"{file_path}", encoding="utf-8").read())'],
+                        [sys.executable, '-c', f'import ast; ast.parse(open(r"{file_path}", encoding="utf-8").read())'],
                         capture_output=True, text=True, timeout=10,
                         cwd=cls.WORKSPACE_DIR
                     )
@@ -1555,7 +1556,20 @@ class LocalToolExecutor:
 
     # ═══ WEB ERİŞİMİ ═══
 
-    _BACKGROUND_PROCS: dict = {}  # {label: {"proc": Popen, "output": str}}
+    _BACKGROUND_PROCS: dict = {}  # {label: {"proc": Popen, "started": float, "buffer": deque[str]}}
+
+    @staticmethod
+    def _bg_output_reader(proc, buffer):
+        """Arka plan process stdout'unu bloklamadan tamponla."""
+        try:
+            if not proc or not proc.stdout:
+                return
+            for line in iter(proc.stdout.readline, ''):
+                if not line:
+                    break
+                buffer.append(line.rstrip())
+        except Exception:
+            pass
 
     @classmethod
     def _web_fetch(cls, args: dict) -> str:
@@ -1703,7 +1717,14 @@ class LocalToolExecutor:
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, cwd=cls.WORKSPACE_DIR
             )
-            cls._BACKGROUND_PROCS[label] = {"proc": proc, "started": time.time()}
+            output_buffer = deque(maxlen=300)
+            cls._BACKGROUND_PROCS[label] = {
+                "proc": proc,
+                "started": time.time(),
+                "buffer": output_buffer,
+            }
+            t = threading.Thread(target=cls._bg_output_reader, args=(proc, output_buffer), daemon=True)
+            t.start()
             return f"✅ Arka plan process başlatıldı: '{label}' (PID: {proc.pid})"
         except Exception as e:
             return f"⚠️ Başlatma hatası: {e}"
@@ -1720,19 +1741,8 @@ class LocalToolExecutor:
         proc = info["proc"]
         elapsed = time.time() - info["started"]
 
-        # Çıktıyı non-blocking oku
-        output_lines = []
-        try:
-            import select
-            while proc.stdout and proc.stdout.readable():
-                line = proc.stdout.readline()
-                if not line:
-                    break
-                output_lines.append(line.rstrip())
-                if len(output_lines) > 50:
-                    break
-        except Exception:
-            pass
+        # Çıktı reader thread tarafından tamponlanır; burada bloklama yok
+        output_lines = list(info.get("buffer", []))
 
         status = "çalışıyor" if proc.poll() is None else f"bitti (kod: {proc.returncode})"
         output = "\n".join(output_lines[-30:]) if output_lines else "(henüz çıktı yok)"
@@ -3258,25 +3268,30 @@ class OpenAIHandler(BaseHTTPRequestHandler):
                     retry_prompt += tr[:2000] + "\n\n"
                 retry_prompt += "\nYukarıdaki araç sonuçlarını kullanarak Türkçe yanıt ver. Kısa ve öz ol."
 
-                retry_response = gemini_bridge.ask(retry_prompt)
-                if retry_response and retry_response.strip() and not retry_response.startswith("❌"):
-                    final_response = self._clean_tool_artifacts(retry_response)
-                    print(f"  ✅ Retry başarılı ({len(final_response):,} chr)")
+                # Stream modunda retry cevabını ask_streaming ile gerçek zamanlı üret
+                if stream and not streaming_final_prompt:
+                    streaming_final_prompt = retry_prompt
+                    final_response = " "  # stream sırasında gerçek çıktı ile değişecek
                 else:
-                    # Retry de başarısız — fallback özet oluştur
-                    print(f"  ⚠️  Retry de başarısız, araç sonuçlarından fallback özet oluşturuluyor...")
-                    fallback_parts = []
-                    for tr in all_tool_results:
-                        if any(k in tr for k in ('Değişiklik yapıldı', 'Dosya yazıldı', 'syntax hatası', 'Syntax hatası', 'SYNTAX ERROR', 'AST PARSE ERROR', 'Hata yok')):
-                            fallback_parts.append(tr.split(']:', 1)[-1].strip() if ']:' in tr else tr.strip())
-                    if fallback_parts:
-                        final_response = "Araç sonuçları:\n\n" + "\n\n".join(fallback_parts)
+                    retry_response = gemini_bridge.ask(retry_prompt)
+                    if retry_response and retry_response.strip() and not retry_response.startswith("❌"):
+                        final_response = self._clean_tool_artifacts(retry_response)
+                        print(f"  ✅ Retry başarılı ({len(final_response):,} chr)")
                     else:
-                        summary_lines = []
-                        for tr in all_tool_results[-5:]:
-                            line = tr.split(']:', 1)[-1].strip() if ']:' in tr else tr.strip()
-                            summary_lines.append(line[:300])
-                        final_response = "İşlem tamamlandı. Sonuçlar:\n\n" + "\n\n".join(summary_lines)
+                        # Retry de başarısız — fallback özet oluştur
+                        print(f"  ⚠️  Retry de başarısız, araç sonuçlarından fallback özet oluşturuluyor...")
+                        fallback_parts = []
+                        for tr in all_tool_results:
+                            if any(k in tr for k in ('Değişiklik yapıldı', 'Dosya yazıldı', 'syntax hatası', 'Syntax hatası', 'SYNTAX ERROR', 'AST PARSE ERROR', 'Hata yok')):
+                                fallback_parts.append(tr.split(']:', 1)[-1].strip() if ']:' in tr else tr.strip())
+                        if fallback_parts:
+                            final_response = "Araç sonuçları:\n\n" + "\n\n".join(fallback_parts)
+                        else:
+                            summary_lines = []
+                            for tr in all_tool_results[-5:]:
+                                line = tr.split(']:', 1)[-1].strip() if ']:' in tr else tr.strip()
+                                summary_lines.append(line[:300])
+                            final_response = "İşlem tamamlandı. Sonuçlar:\n\n" + "\n\n".join(summary_lines)
             else:
                 final_response = "Gemini cevap veremedi. Lütfen tekrar deneyin."
 
