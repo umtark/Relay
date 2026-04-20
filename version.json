@@ -1,13 +1,14 @@
 {
-    "version":  "1.0.6",
+    "version":  "1.1.0",
     "date":  "2026-04-20",
     "channel":  "stable",
     "files":  [
                   "Relay_proxy.py",
                   "relay_updater.py",
+                  "relay_memory.py",
                   "setup_kit/patch_continue_tr.py",
                   "setup_kit/continue_config/config.yaml",
                   "setup_kit/vscode_settings/settings.json"
               ],
-    "changelog":  "Config ismi Relay olarak duzeltildi"
+    "changelog":  "Hafiza sistemi, gorev takibi, deep_check, sohbet ozeti eklendi"
 }

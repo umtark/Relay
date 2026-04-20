@@ -76,6 +76,8 @@ mic_test.py
 ornek_api.py
 baslat.bat
 relay_brain.db
+relay_memory.db
+.update_pending
 Modelfile_relay
 *.ps1
 !yayinla.ps1

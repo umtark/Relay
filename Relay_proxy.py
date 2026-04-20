@@ -91,9 +91,24 @@ Workspace: {workspace_dir}
 - Basit soru/selam → kısa, samimi cevap (1-3 cümle)
 - Dosya/kod sorusu → MUTLAKA araç kullan, anlat
 - Teknik/derin soru → adım adım analiz, kod örnekleri
-- Hata ayıklama → önce get_errors veya analyze_file, sonra çözüm öner
+- Hata ayıklama → önce get_errors veya deep_check, sonra çözüm öner
 - Kod yazma → çalışan kod + kısa açıklama
 - Birden fazla dosyayı ilgilendiren soru → multi_grep ile hızlı bağlam topla
+- Çok adımlı görev → todo_add ile plan yap, ilerledikçe todo_update ile güncelle
+
+🧠 HAFIZA SİSTEMİ:
+- Önemli kararlar, kullanıcı tercihleri, proje bilgileri → memory_save ile kaydet (importance=2-3)
+- "Bunu hatırla", "not al", "kaydet" derse → memory_save kullan
+- "Ne biliyorsun?", "hafızanda ne var?" derse → memory_list kullan  
+- Önceki sohbetlerden bilgi lazımsa → memory_search ile ara
+- Sohbet sonunda önemli şeyler yapıldıysa → save_conversation_summary ile özet kaydet
+- [Hafıza Bağlamı] bloğundaki bilgileri KULLAN, cevaplarına yansıt
+
+📋 GÖREV TAKİBİ:
+- Karmaşık, çok adımlı istekler → todo_add ile görev listesi oluştur
+- Her adıma başlarken → todo_update ile in-progress yap
+- Bitirince → todo_update ile completed yap
+- Kullanıcı "neredeyiz?", "görevler?" derse → todo_list ile göster
 """
 
 RELAY_TOOL_RULES = """
@@ -152,6 +167,11 @@ ARAÇ SEÇİM KURALLARI:
 6. Dosya içeriği sorusu → ÖNCE analyze_file, detay lazımsa SONRA read_file
 7. Kod düzenleme → ÖNCE read_file ile mevcut kodu oku, SONRA replace_in_file
 8. analyze_file sonuçlarında satır numaraları yazar → detay için read_file
+9. "hatırla", "not al", "kaydet" → memory_save (importance=2+)
+10. "ne biliyorsun?", "hafıza" → memory_list veya memory_search
+11. Çok adımlı görev → todo_add ile plan oluştur, ilerledikçe todo_update
+12. "derin kontrol", "güvenlik kontrolü" → deep_check
+13. Sohbet sonu / önemli karar → save_conversation_summary
 
 KURALLAR:
 1. Dosya/kod sorusu geldiğinde MUTLAKA araç kullan, TAHMİN ETME
@@ -383,6 +403,138 @@ class LocalToolExecutor:
                 }
             }
         },
+        # ═══ HAFIZA ARAÇLARI ═══
+        {
+            "type": "function",
+            "function": {
+                "name": "memory_save",
+                "description": "Kalıcı hafızaya not/bilgi kaydet. Sohbetler arası hatırlanır. Kullanıcı tercihleri, proje kararları, öğrenilen kalıplar için.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string", "description": "Kaydedilecek bilgi"},
+                        "category": {"type": "string", "description": "Kategori: preference, decision, pattern, project, note", "enum": ["preference", "decision", "pattern", "project", "note"]},
+                        "tags": {"type": "string", "description": "Etiketler (virgülle ayrılmış)"},
+                        "importance": {"type": "integer", "description": "Önem (1=düşük, 2=normal, 3=yüksek). Yüksek önem → her sohbette hatırlanır"}
+                    },
+                    "required": ["content"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "memory_search",
+                "description": "Hafızada ara — önceki sohbetlerden bilgi bul",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Aranacak kelime/konu"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "memory_list",
+                "description": "Hafıza kayıtlarını listele (tümü veya kategoriye göre)",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "category": {"type": "string", "description": "Filtrelenecek kategori (boş bırakırsan tümü)"}
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "memory_delete",
+                "description": "Hafıza kaydını sil (ID ile)",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "memory_id": {"type": "integer", "description": "Silinecek hafıza kaydının ID'si"}
+                    },
+                    "required": ["memory_id"]
+                }
+            }
+        },
+        # ═══ GÖREV TAKİBİ ═══
+        {
+            "type": "function",
+            "function": {
+                "name": "todo_add",
+                "description": "Yeni görev ekle — çok adımlı işlerde planlama için",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Görev başlığı (kısa, eylem odaklı)"}
+                    },
+                    "required": ["title"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "todo_update",
+                "description": "Görev durumunu güncelle",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "todo_id": {"type": "integer", "description": "Görev ID"},
+                        "status": {"type": "string", "description": "Yeni durum", "enum": ["not-started", "in-progress", "completed"]}
+                    },
+                    "required": ["todo_id", "status"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "todo_list",
+                "description": "Aktif görevleri listele",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+        # ═══ GELİŞMİŞ ANALİZ ═══
+        {
+            "type": "function",
+            "function": {
+                "name": "deep_check",
+                "description": "Dosyayı derinlemesine kontrol et — syntax + stil + potansiyel hatalar + güvenlik. get_errors'un gelişmiş versiyonu.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filePath": {"type": "string", "description": "Kontrol edilecek dosya yolu"}
+                    },
+                    "required": ["filePath"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "save_conversation_summary",
+                "description": "Mevcut sohbetin özetini hafızaya kaydet — sonraki sohbetlerde bağlam olarak kullanılır",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "summary": {"type": "string", "description": "Sohbet özeti (ne yapıldı, ne kararlaştırıldı)"},
+                        "topics": {"type": "string", "description": "Konular (virgülle ayrılmış)"},
+                        "files_touched": {"type": "string", "description": "Değiştirilen dosyalar (virgülle ayrılmış)"},
+                        "decisions": {"type": "string", "description": "Alınan kararlar"}
+                    },
+                    "required": ["summary"]
+                }
+            }
+        },
     ]
 
     # Dosya okurken atlanacak binary uzantılar
@@ -435,6 +587,15 @@ class LocalToolExecutor:
                 "analyze_file": cls._analyze_file,
                 "get_errors": cls._get_errors,
                 "multi_grep": cls._multi_grep,
+                "memory_save": cls._memory_save,
+                "memory_search": cls._memory_search,
+                "memory_list": cls._memory_list,
+                "memory_delete": cls._memory_delete,
+                "todo_add": cls._todo_add,
+                "todo_update": cls._todo_update,
+                "todo_list": cls._todo_list,
+                "deep_check": cls._deep_check,
+                "save_conversation_summary": cls._save_conversation_summary,
             }.get(tool_name)
             if not handler:
                 return f"Bilinmeyen araç: {tool_name}"
@@ -1029,6 +1190,171 @@ class LocalToolExecutor:
             all_results.append(f"── Arama: '{query}' ──\n{result}")
 
         return "\n\n".join(all_results)
+
+    # ═══ HAFIZA & GÖREV ARAÇLARI ═══
+
+    @classmethod
+    def _memory_save(cls, args: dict) -> str:
+        from relay_memory import memory_save
+        return memory_save(
+            content=args.get("content", ""),
+            category=args.get("category", "general"),
+            tags=args.get("tags", ""),
+            importance=args.get("importance", 1)
+        )
+
+    @classmethod
+    def _memory_search(cls, args: dict) -> str:
+        from relay_memory import memory_search
+        return memory_search(query=args.get("query", ""))
+
+    @classmethod
+    def _memory_list(cls, args: dict) -> str:
+        from relay_memory import memory_list
+        return memory_list(category=args.get("category"))
+
+    @classmethod
+    def _memory_delete(cls, args: dict) -> str:
+        from relay_memory import memory_delete
+        return memory_delete(memory_id=args.get("memory_id", 0))
+
+    @classmethod
+    def _todo_add(cls, args: dict) -> str:
+        from relay_memory import todo_add
+        return todo_add(title=args.get("title", ""))
+
+    @classmethod
+    def _todo_update(cls, args: dict) -> str:
+        from relay_memory import todo_update
+        return todo_update(
+            todo_id=args.get("todo_id", 0),
+            status=args.get("status", "completed")
+        )
+
+    @classmethod
+    def _todo_list(cls, args: dict) -> str:
+        from relay_memory import todo_list
+        return todo_list()
+
+    @classmethod
+    def _save_conversation_summary(cls, args: dict) -> str:
+        from relay_memory import save_conversation_summary
+        return save_conversation_summary(
+            summary=args.get("summary", ""),
+            topics=args.get("topics", ""),
+            files_touched=args.get("files_touched", ""),
+            decisions=args.get("decisions", "")
+        )
+
+    @classmethod
+    def _deep_check(cls, args: dict) -> str:
+        """Gelişmiş dosya kontrolü — syntax + stil + potansiyel hatalar."""
+        file_path = cls._resolve_path(args.get("filePath", ""))
+        if not os.path.isfile(file_path):
+            return f"Dosya bulunamadı: {file_path}"
+
+        results = []
+
+        # 1. Syntax kontrolü (py_compile)
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == '.py':
+            import py_compile
+            try:
+                py_compile.compile(file_path, doraise=True)
+                results.append("✅ Syntax: Hata yok")
+            except py_compile.PyCompileError as e:
+                results.append(f"❌ Syntax hatası: {e}")
+
+            # 2. AST analizi — potansiyel sorunlar
+            try:
+                import ast
+                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                    source = f.read()
+                tree = ast.parse(source)
+
+                # Kullanılmayan import tespiti (basit)
+                imports = []
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            name = alias.asname or alias.name.split('.')[0]
+                            imports.append((name, node.lineno))
+                    elif isinstance(node, ast.ImportFrom):
+                        for alias in node.names:
+                            if alias.name != '*':
+                                name = alias.asname or alias.name
+                                imports.append((name, node.lineno))
+
+                unused = []
+                for name, lineno in imports:
+                    # Basit kontrol: import adı dosyada kaç kere geçiyor
+                    count = source.count(name)
+                    if count <= 1:  # Sadece import satırında geçiyor
+                        unused.append(f"  Satır {lineno}: '{name}' kullanılmamış olabilir")
+                if unused:
+                    results.append("⚠️ Potansiyel kullanılmayan import'lar:\n" + "\n".join(unused[:10]))
+
+                # Fonksiyon karmaşıklık kontrolü
+                complex_funcs = []
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        # İç içe if/for/while sayısı
+                        depth = 0
+                        for child in ast.walk(node):
+                            if isinstance(child, (ast.If, ast.For, ast.While, ast.Try, ast.ExceptHandler)):
+                                depth += 1
+                        if depth > 8:
+                            complex_funcs.append(f"  {node.name}() (satır {node.lineno}): karmaşıklık={depth}")
+                if complex_funcs:
+                    results.append("⚠️ Karmaşık fonksiyonlar:\n" + "\n".join(complex_funcs[:5]))
+
+                # Güvenlik kontrolleri
+                security_issues = []
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Call):
+                        if isinstance(node.func, ast.Name):
+                            if node.func.id == 'eval':
+                                security_issues.append(f"  Satır {node.lineno}: eval() kullanımı (güvenlik riski)")
+                            elif node.func.id == 'exec':
+                                security_issues.append(f"  Satır {node.lineno}: exec() kullanımı (güvenlik riski)")
+                        elif isinstance(node.func, ast.Attribute):
+                            if node.func.attr == 'system' and isinstance(node.func.value, ast.Name) and node.func.value.id == 'os':
+                                security_issues.append(f"  Satır {node.lineno}: os.system() → subprocess.run() tercih edin")
+                if security_issues:
+                    results.append("🔒 Güvenlik uyarıları:\n" + "\n".join(security_issues[:5]))
+
+                # Genel istatistik
+                func_count = sum(1 for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+                class_count = sum(1 for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
+                line_count = len(source.splitlines())
+                results.append(f"📊 İstatistik: {line_count} satır, {func_count} fonksiyon, {class_count} sınıf, {len(imports)} import")
+
+            except SyntaxError:
+                pass  # Zaten py_compile yakalamış
+            except Exception as e:
+                results.append(f"⚠️ AST analizi başarısız: {e}")
+
+            # 3. pylint/flake8 varsa çalıştır
+            try:
+                import subprocess as _sp
+                r = _sp.run(
+                    [sys.executable, "-m", "flake8", "--max-line-length=120", "--count", "--statistics", file_path],
+                    capture_output=True, text=True, timeout=15
+                )
+                if r.stdout.strip():
+                    lines = r.stdout.strip().splitlines()
+                    results.append(f"📝 Flake8 ({len(lines)} uyarı):\n" + "\n".join(lines[:15]))
+                else:
+                    results.append("✅ Flake8: Uyarı yok")
+            except (FileNotFoundError, Exception):
+                pass  # flake8 yüklü değil, sessizce geç
+
+        else:
+            results.append(f"ℹ️ {ext} dosyası — sadece temel kontrol yapılabilir")
+            if os.path.getsize(file_path) == 0:
+                results.append("⚠️ Dosya boş!")
+
+        return "\n".join(results) if results else "Kontrol tamamlandı, sorun bulunamadı."
 
 
 def _get_chrome_version() -> str:
@@ -2172,6 +2498,15 @@ class OpenAIHandler(BaseHTTPRequestHandler):
         prompt_parts.append(f"[System Instruction]: {identity_prompt}\n{tool_rules}")
         tool_prompt = self._build_tool_prompt(LocalToolExecutor.TOOL_DEFINITIONS)
         prompt_parts.append(f"[System Instruction]: {tool_prompt}")
+
+        # Hafıza bağlamını enjekte et (önceki sohbetlerden öğrenilen bilgiler)
+        try:
+            from relay_memory import load_context_for_prompt
+            memory_context = load_context_for_prompt()
+            if memory_context:
+                prompt_parts.append(f"[Hafıza Bağlamı]: {memory_context}")
+        except Exception:
+            pass
 
         # Workspace dosya ağacını ekle — Gemini hangi dosyaların olduğunu bilsin
         workspace_tree = _get_workspace_tree()
