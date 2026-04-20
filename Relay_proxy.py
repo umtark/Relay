@@ -649,6 +649,8 @@ class LocalToolExecutor:
         "search_files": "file_search",
         "search_text": "grep_search",
         "create_file": "write_file",
+        "create_new_file": "write_file",
+        "new_file": "write_file",
         "edit_file": "replace_in_file",
         "replace_string_in_file": "replace_in_file",
     }
@@ -959,14 +961,33 @@ class LocalToolExecutor:
 
     @classmethod
     def _write_file(cls, args: dict) -> str:
+        # Argüman adı normalizasyonu
+        if "filepath" in args and "filePath" not in args:
+            args["filePath"] = args.pop("filepath")
+        if "contents" in args and "content" not in args:
+            args["content"] = args.pop("contents")
+        if "file_path" in args and "filePath" not in args:
+            args["filePath"] = args.pop("file_path")
         file_path = cls._resolve_path(args["filePath"])
-        content = args["content"]
+        content = args.get("content", "")
+
+        if not content or not content.strip():
+            return f"Dosya yazma hatası: content boş geldi (parse sorunu olabilir). filePath={file_path}"
 
         try:
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
-            return f"Dosya yazıldı: {file_path} ({len(content):,} karakter)"
+
+            # Python dosyası ise syntax kontrolü yap
+            result_msg = f"Dosya yazıldı: {file_path} ({len(content):,} karakter)"
+            if file_path.endswith('.py'):
+                try:
+                    compile(content, file_path, 'exec')
+                except SyntaxError as se:
+                    result_msg += f"\n⚠️ UYARI: Dosyada syntax hatası var! Satır {se.lineno}: {se.msg}"
+                    result_msg += f"\n💡 Lütfen replace_in_file ile düzelt."
+            return result_msg
         except Exception as e:
             return f"Dosya yazma hatası: {e}"
 
@@ -1206,7 +1227,15 @@ class LocalToolExecutor:
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
 
-            return f"Değişiklik yapıldı: {file_path}"
+            # Python dosyası ise syntax kontrolü yap
+            result_msg = f"Değişiklik yapıldı: {file_path}"
+            if file_path.endswith('.py'):
+                try:
+                    compile(new_content, file_path, 'exec')
+                except SyntaxError as se:
+                    result_msg += f"\n⚠️ UYARI: Düzenleme sonrası syntax hatası oluştu! Satır {se.lineno}: {se.msg}"
+                    result_msg += f"\n💡 Lütfen tekrar replace_in_file ile düzelt."
+            return result_msg
         except Exception as e:
             return f"Dosya düzenleme hatası: {e}"
 
@@ -3247,6 +3276,160 @@ class OpenAIHandler(BaseHTTPRequestHandler):
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _fallback_extract_tool(raw: str) -> dict | None:
+        """JSON parse başarısız olduğunda regex ile name ve arguments çıkar.
+        Gemini'nin bozuk JSON'undan (iç içe tırnak, escape hataları) kurtarır."""
+        # name çıkar
+        name_m = re.search(r'"name"\s*:\s*"([^"]+)"', raw)
+        if not name_m:
+            return None
+        name = name_m.group(1)
+
+        # arguments bloğunu bul — "arguments": { ... } (en dış süslü parantezler)
+        args_start = raw.find('"arguments"')
+        if args_start == -1:
+            return {"name": name, "arguments": {}}
+
+        # İlk { bul
+        brace_pos = raw.find('{', args_start)
+        if brace_pos == -1:
+            return {"name": name, "arguments": {}}
+
+        # Süslü parantez dengesiyle arguments bloğunu çıkar
+        # String literal içindeki { } karakterlerini yoksay (f-string problemi)
+        depth = 0
+        end_pos = brace_pos
+        in_string = False
+        for i in range(brace_pos, len(raw)):
+            ch = raw[i]
+            # Escape karakter — bir sonraki karakteri atla
+            if ch == '\\' and i + 1 < len(raw):
+                continue
+            # String literal toggle (kaçışlı tırnak hariç)
+            if ch == '"' and (i == 0 or raw[i-1] != '\\'):
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    end_pos = i + 1
+                    break
+        args_raw = raw[brace_pos:end_pos]
+
+        # Bilinen key'leri regex ile çıkar
+        arguments = {}
+
+        # filePath / filepath / file_path çıkar
+        fp_m = re.search(r'"(?:filePath|filepath|file_path)"\s*:\s*"((?:[^"\\]|\\.)*)"', args_raw)
+        if fp_m:
+            arguments["filePath"] = fp_m.group(1).replace('\\\\', '\\')
+
+        # content / contents çıkar — son key olabilir, tırnaklar sorunlu olabilir
+        content_m = re.search(r'"(?:content|contents)"\s*:\s*"', args_raw)
+        if content_m:
+            content_start = content_m.end()
+            # Sondan geriye doğru tarayarak content değerinin bitişini bul.
+            # content genellikle arguments'ın son key'idir, bu yüzden
+            # sondan geriye doğru }' atlayıp son kapanış tırnağını bul.
+            # AMA: Gemini, f-string içeren kod ürettiğinde (ör: f"Merhaba {x}")
+            # iç tırnaklar escape edilmemiş olabilir. Bu yüzden:
+            # 1) Sondan geriye } ve whitespace atla
+            # 2) Son " bul — bu content'in kapanış tırnağı
+            content_end = len(args_raw) - 1
+            while content_end > content_start and args_raw[content_end] in ' \t\n\r}':
+                content_end -= 1
+            if content_end > content_start and args_raw[content_end] == '"':
+                content_val = args_raw[content_start:content_end]
+                # Literal escape'leri çöz
+                content_val = content_val.replace('\\n', '\n')
+                content_val = content_val.replace('\\t', '\t')
+                content_val = content_val.replace('\\"', '"')
+                content_val = content_val.replace('\\\\', '\\')
+                arguments["content"] = content_val
+            else:
+                # Kapanış tırnağı bulunamadı — iç içe tırnak sorunu olabilir.
+                # filePath'ten sonra, content_start'tan itibaren sona kadar al
+                # ve sondaki fazla } ve " karakterlerini temizle.
+                content_val = args_raw[content_start:].rstrip().rstrip('}').rstrip().rstrip('"')
+                if content_val:
+                    content_val = content_val.replace('\\n', '\n')
+                    content_val = content_val.replace('\\t', '\t')
+                    content_val = content_val.replace('\\"', '"')
+                    content_val = content_val.replace('\\\\', '\\')
+                    arguments["content"] = content_val
+
+        # path (list_dir vb.)
+        path_m = re.search(r'"path"\s*:\s*"((?:[^"\\]|\\.)*)"', args_raw)
+        if path_m:
+            arguments["path"] = path_m.group(1).replace('\\\\', '\\')
+
+        # query (grep_search vb.)
+        query_m = re.search(r'"query"\s*:\s*"((?:[^"\\]|\\.)*)"', args_raw)
+        if query_m:
+            arguments["query"] = query_m.group(1)
+
+        # includePattern
+        ip_m = re.search(r'"includePattern"\s*:\s*"((?:[^"\\]|\\.)*)"', args_raw)
+        if ip_m:
+            arguments["includePattern"] = ip_m.group(1)
+
+        # startLine / endLine
+        sl_m = re.search(r'"startLine"\s*:\s*(\d+)', args_raw)
+        if sl_m:
+            arguments["startLine"] = int(sl_m.group(1))
+        el_m = re.search(r'"endLine"\s*:\s*(\d+)', args_raw)
+        if el_m:
+            arguments["endLine"] = int(el_m.group(1))
+
+        # oldString / newString (replace_in_file) — tırnaklar sorunlu olabilir
+        # Gemini f-string'li kod ürettiğinde kaçışsız iç tırnaklar olabilir.
+        # Strateji: İlk basit tırnak denenir, başarısız olursa sonraki key'e
+        # veya bloğun sonuna kadar alınır.
+        _next_keys = ["oldString", "newString", "old_string", "new_string",
+                       "filePath", "filepath", "file_path", "content", "contents"]
+        for key in ("oldString", "newString", "old_string", "new_string"):
+            km = re.search(rf'"{key}"\s*:\s*"', args_raw)
+            if km:
+                kstart = km.end()
+                rest = args_raw[kstart:]
+
+                # Yöntem 1: Sonraki bilinen key'i bul — ","key": pattern
+                best_end = None
+                for nk in _next_keys:
+                    if nk == key:
+                        continue
+                    nk_pattern = f'",\n' if nk == key else f'",\n'
+                    # Sonraki key pattern: ",\s*"nextKey"
+                    nk_m = re.search(rf'"\s*,\s*"{nk}"\s*:', rest)
+                    if nk_m:
+                        if best_end is None or nk_m.start() < best_end:
+                            best_end = nk_m.start()
+                # Son key ise — sondaki "} pattern'ini bul
+                if best_end is None:
+                    # Sondan geriye doğru } ve whitespace atla, " bul
+                    end_idx = len(rest) - 1
+                    while end_idx > 0 and rest[end_idx] in ' \t\n\r}':
+                        end_idx -= 1
+                    if end_idx > 0 and rest[end_idx] == '"':
+                        best_end = end_idx
+
+                if best_end is not None and best_end > 0:
+                    val = rest[:best_end]
+                    val = val.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"').replace('\\\\', '\\')
+                    norm_key = "oldString" if "old" in key else "newString"
+                    arguments[norm_key] = val
+
+        if arguments:
+            print(f"  🔧 Fallback parser: {name}({list(arguments.keys())})")
+            return {"name": name, "arguments": arguments}
+
+        return {"name": name, "arguments": {}}
+
     def _parse_tool_calls(self, response_text):
         """Gemini cevabından tool call bloklarını parse et.
         Desteklenen formatlar:
@@ -3334,14 +3517,52 @@ class OpenAIHandler(BaseHTTPRequestHandler):
         for match in matches:
             try:
                 raw = match.strip()
-                # Windows path fix: C:\Users gibi yollar JSON'da geçersiz escape oluşturur
-                # \U, \D, \R vb. geçersiz — sadece geçerli JSON escape'leri koru
-                raw = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', raw)
-                tc_data = json.loads(raw)
-                if "name" not in tc_data:
+                tc_data = None
+
+                # Adım 1: Önce ham JSON'u dene (json.dumps'tan geliyorsa zaten geçerli)
+                try:
+                    tc_data = json.loads(raw)
+                except json.JSONDecodeError:
+                    pass
+
+                # Adım 2: Windows path fix — C:\Users gibi geçersiz escape'leri düzelt
+                if tc_data is None:
+                    try:
+                        fixed = raw
+                        fixed = re.sub(r'\\u(?![0-9a-fA-F]{4})', r'\\\\u', fixed)
+                        fixed = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', fixed)
+                        tc_data = json.loads(fixed)
+                    except json.JSONDecodeError:
+                        pass
+
+                # Adım 3: Tırnak + backslash düzeltme — print("Merhaba") gibi iç içe tırnaklar
+                if tc_data is None:
+                    tc_data = self._fallback_extract_tool(raw)
+
+                if tc_data is None or "name" not in tc_data:
+                    print(f"  ⚠️ Tool call parse hatası (tüm yöntemler başarısız), metin: {raw[:200]}")
                     continue
+
+                # Araç adı normalizasyonu
+                name = tc_data["name"]
+                _tool_name_aliases = {
+                    "create_new_file": "write_file",
+                    "create_file": "write_file",
+                    "edit_file": "replace_in_file",
+                    "new_file": "write_file",
+                }
+                name = _tool_name_aliases.get(name, name)
+                tc_data["name"] = name
+
+                # Argüman adı normalizasyonu (filepath→filePath, contents→content)
                 arguments = tc_data.get("arguments", {})
                 if isinstance(arguments, dict):
+                    if "filepath" in arguments and "filePath" not in arguments:
+                        arguments["filePath"] = arguments.pop("filepath")
+                    if "contents" in arguments and "content" not in arguments:
+                        arguments["content"] = arguments.pop("contents")
+                    if "file_path" in arguments and "filePath" not in arguments:
+                        arguments["filePath"] = arguments.pop("file_path")
                     arguments = json.dumps(arguments, ensure_ascii=False)
                 elif not isinstance(arguments, str):
                     arguments = json.dumps(arguments, ensure_ascii=False)
@@ -3349,11 +3570,11 @@ class OpenAIHandler(BaseHTTPRequestHandler):
                     "id": f"call_{uuid.uuid4().hex[:8]}",
                     "type": "function",
                     "function": {
-                        "name": tc_data["name"],
+                        "name": name,
                         "arguments": arguments
                     }
                 })
-            except (json.JSONDecodeError, KeyError) as e:
+            except Exception as e:
                 print(f"  ⚠️ Tool call parse hatası: {e}, metin: {match[:100]}")
                 continue
 
