@@ -1,12 +1,13 @@
-{
-    "version": "1.0.0",
-    "date": "2026-04-20",
-    "channel": "stable",
-    "files": [
-        "Relay_proxy.py",
-        "setup_kit/patch_continue_tr.py",
-        "setup_kit/continue_config/config.yaml",
-        "setup_kit/vscode_settings/settings.json"
-    ],
-    "changelog": "İlk sürüm"
+﻿{
+    "version":  "1.0.1",
+    "date":  "2026-04-20",
+    "channel":  "stable",
+    "files":  [
+                  "Relay_proxy.py",
+                  "relay_updater.py",
+                  "setup_kit/patch_continue_tr.py",
+                  "setup_kit/continue_config/config.yaml",
+                  "setup_kit/vscode_settings/settings.json"
+              ],
+    "changelog":  "Guncelleme bildirimi sohbete eklendi, toast kaldirildi"
 }

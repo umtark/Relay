@@ -179,6 +179,7 @@ def check_and_update(silent=False):
 
     result["updated"] = True
     result["files"] = updated_files
+    result["changelog"] = changelog
 
     if not silent:
         print(f"  🎉 v{local_ver} → v{remote_ver} güncellendi!")

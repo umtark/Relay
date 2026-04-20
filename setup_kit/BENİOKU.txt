@@ -1,0 +1,46 @@
+Relay Dev - Continue Kurulum Kiti
+==================================
+
+İKİ ADIMLI KURULUM:
+
+  ADIM 1 — PAKETLEME (format ÖNCE, bir kez yapılır):
+    setup_kit\paketle.ps1 çalıştır
+    → Yamalı Continue + Relay_proxy → continue_ext/ klasörüne paketlenir
+
+  ADIM 2 — KURULUM (format SONRA):
+    setup_kit\KUR.bat çalıştır (çift tıkla)
+    → Her şey yerine kopyalanır, Python/internet gerekmez
+
+Klasör yapısı:
+  setup_kit/
+  ├── KUR.bat                   ← Çift tıkla çalıştır (format sonrası)
+  ├── kur.ps1                   ← Ana kurulum scripti
+  ├── paketle.ps1               ← Paketleme scripti (format öncesi)
+  ├── patch_continue_tr.py      ← Türkçe yama (sadece geliştirme için)
+  ├── continue_config/          ← ~/.continue/ ayarları
+  │   ├── config.yaml           ← Model: Relay 1.2 @ localhost:5001
+  │   ├── .continuerc.json
+  │   ├── config.ts
+  │   ├── package.json
+  │   └── .continueignore
+  ├── vscode_settings/
+  │   └── settings.json         ← Workspace VS Code ayarları
+  └── continue_ext/             ← Paketlenmiş extension (paketle.ps1 oluşturur)
+      ├── gui/                  ← Türkçe yamalı GUI
+      ├── relay/                ← Gömülü proxy
+      │   ├── Relay_proxy.py
+      │   └── Relay_Baslat.bat
+      └── ...                   ← Continue extension dosyaları
+
+Ne yapar (KUR.bat):
+  1. Continue extension'ı kopyalar (Türkçe yamalı, Relay gömülü)
+  2. ~/.continue/ config dosyalarını kopyalar
+  3. .vscode/settings.json oluşturur
+  4. Relay_Baslat.bat kısayolu oluşturur
+  5. Python bağımlılıklarını kurar (selenium, webdriver-manager)
+
+Format sonrası yapılacaklar:
+  1. VS Code kur (code.visualstudio.com)
+  2. Python kur (python.org)
+  3. KUR.bat çalıştır
+  4. VS Code aç → Relay_Baslat.bat çalıştır → hazır!

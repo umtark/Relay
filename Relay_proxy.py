@@ -2056,6 +2056,7 @@ def _get_workspace_tree(max_depth: int = 2, max_entries: int = 80) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 gemini_bridge: GeminiBridge = None
+_pending_update_msg: str = None  # Güncelleme olduysa sohbete yazılacak bilgi
 
 
 class OpenAIHandler(BaseHTTPRequestHandler):
@@ -2397,6 +2398,13 @@ class OpenAIHandler(BaseHTTPRequestHandler):
         # ═══ YANITTAN TOOL CALL ARTIKLARINI TEMİZLE ═══
         final_response = self._clean_tool_artifacts(final_response)
 
+        # ═══ GÜNCELLEME BİLDİRİMİ — sohbetin başına ekle ═══
+        global _pending_update_msg
+        if _pending_update_msg:
+            update_banner = f"🔄 **Güncelleme:** {_pending_update_msg}\n\n---\n\n"
+            final_response = update_banner + final_response
+            _pending_update_msg = None
+
         print(f"  ✅ Cevap ({len(final_response):,} chr, {elapsed:.1f}s{iter_info})")
 
         # ═══ YANITI CONTINUE'A GÖNDER ═══
@@ -2735,14 +2743,20 @@ def main():
     args = parser.parse_args()
 
     # ═══ OTOMATİK GÜNCELLEME ═══
+    global _pending_update_msg
     if not args.no_update:
         try:
             from relay_updater import check_and_update, notify_owner
             update_result = check_and_update()
-            if update_result.get("updated") and "Relay_proxy.py" in str(update_result.get("files", [])):
-                print("  🔄 Proxy güncellendi, yeniden başlatılıyor...")
-                notify_owner("Güncelleme uygulandı")
-                os.execv(sys.executable, [sys.executable] + sys.argv + ["--no-update"])
+            if update_result.get("updated"):
+                old_v = update_result.get("old_version", "?")
+                new_v = update_result.get("new_version", "?")
+                changelog = update_result.get("changelog", "")
+                _pending_update_msg = f"v{old_v} → v{new_v}. Değişiklik: {changelog}"
+                if "Relay_proxy.py" in str(update_result.get("files", [])):
+                    print("  🔄 Proxy güncellendi, yeniden başlatılıyor...")
+                    notify_owner("Güncelleme uygulandı")
+                    os.execv(sys.executable, [sys.executable] + sys.argv + ["--no-update"])
             # İlk çalıştırmada bildirim
             notify_owner("Relay başlatıldı")
         except ImportError:

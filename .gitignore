@@ -8,6 +8,7 @@ venv/
 
 # VS Code
 .vscode/
+.continue/
 
 # Chrome profiles (büyük, kişiye özel)
 chrome_profile/
@@ -24,11 +25,14 @@ whatsapp_downloads/
 Headless_output/
 output/
 memory/
+data/
 
 # OS
 Thumbs.db
 Desktop.ini
 .DS_Store
+*.png
+*.ico
 
 # Büyük model dosyaları
 *.bin
@@ -46,13 +50,40 @@ setup_kit/continue_ext/
 # Geçici dosyalar
 *.bak
 *.tmp
+*.log
 debug_output.txt
 scan_report.json
 *.bak_cleanup
+_test_*.py
+.code_scanner_cache.json
 
-# Driver
+# Driver & kurulum
 realtek_driver/
 ffmpeg/
-
-# Ses efekt kurulum
 ses_efekt_kurulum/
+
+# Bu projede kullanılmayan diğer scriptler
+Relay/
+bot/
+gamepad_controller.py
+whatsapp_ai_bot.py
+tarsus_vardiya*.py
+aracseseffekt.py
+disk_compressor.py
+hubert_custom.py
+diag_dis.py
+mic_test.py
+ornek_api.py
+baslat.bat
+relay_brain.db
+Modelfile_relay
+*.ps1
+!yayinla.ps1
+check_*.py
+_*.py
+fix_*.py
+fix_*.ps1
+download_*.ps1
+build_exe.ps1
+debug_*.py
+make_ico*
