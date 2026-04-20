@@ -3641,9 +3641,8 @@ class OpenAIHandler(BaseHTTPRequestHandler):
                 for nk in _next_keys:
                     if nk == key:
                         continue
-                    nk_pattern = f'",\n' if nk == key else f'",\n'
-                    # Sonraki key pattern: ",\s*"nextKey"
-                    nk_m = re.search(rf'"\s*,\s*"{nk}"\s*:', rest)
+                    # Sonraki key pattern: , "nextKey":
+                    nk_m = re.search(rf'\s*,\s*"{nk}"\s*:', rest)
                     if nk_m:
                         if best_end is None or nk_m.start() < best_end:
                             best_end = nk_m.start()
