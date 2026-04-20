@@ -42,7 +42,12 @@ Write-Host "  Versiyon: $($vj.version) -> $newVer" -ForegroundColor Yellow
 $vj.version = $newVer
 $vj.date = (Get-Date).ToString("yyyy-MM-dd")
 $vj.changelog = $Not
-$vj | ConvertTo-Json -Depth 5 | Set-Content "version.json" -Encoding UTF8
+# BOM'suz UTF-8 yaz
+[System.IO.File]::WriteAllText(
+    (Join-Path $PSScriptRoot "version.json"),
+    ($vj | ConvertTo-Json -Depth 5),
+    [System.Text.UTF8Encoding]::new($false)
+)
 Write-Host "  version.json guncellendi" -ForegroundColor Green
 
 # 3) Lokal extension kopyasını güncelle (kendi makinemiz için)

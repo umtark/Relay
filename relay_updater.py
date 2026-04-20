@@ -47,7 +47,7 @@ def _fetch_json(url):
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Relay-Updater/1.0"})
         with urllib.request.urlopen(req, timeout=UPDATE_TIMEOUT) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            return json.loads(resp.read().decode("utf-8-sig"))
     except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError):
         return None
 
@@ -66,7 +66,7 @@ def _get_local_version():
     """Lokal versiyon bilgisini oku."""
     if os.path.isfile(LOCAL_VERSION_FILE):
         try:
-            with open(LOCAL_VERSION_FILE, "r", encoding="utf-8") as f:
+            with open(LOCAL_VERSION_FILE, "r", encoding="utf-8-sig") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             pass
@@ -75,7 +75,7 @@ def _get_local_version():
 
 def _write_local_version(data):
     """Lokal versiyon bilgisini yaz."""
-    with open(LOCAL_VERSION_FILE, "w", encoding="utf-8") as f:
+    with open(LOCAL_VERSION_FILE, "w", encoding="utf-8", newline="\n") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 
