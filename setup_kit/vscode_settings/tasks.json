@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Relay Proxy Başlat",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "${userHome}/.vscode/extensions/continue.continue-1.2.22-win32-x64/relay/Relay_proxy.py"
+            ],
+            "isBackground": true,
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated",
+                "group": "relay"
+            },
+            "problemMatcher": [],
+            "runOptions": {
+                "runOn": "folderOpen"
+            }
+        }
+    ]
+}

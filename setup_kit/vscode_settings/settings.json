@@ -1,0 +1,13 @@
+{
+    "python.defaultInterpreterPath": "python",
+    "chat.tools.terminal.autoApprove": {
+        "/^python -c \"from ddgs import DDGS; print\\('ddgs OK'\\)\" 2>&1; python -c \"import wikipediaapi; print\\('wikipediaapi OK'\\)\" 2>&1$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    },
+    "debug.internalConsoleOptions": "neverOpen",
+    "debug.openDebug": "neverOpen",
+    "terminal.integrated.defaultLocation": "view",
+    "task.allowAutomaticTasks": "on"
+}

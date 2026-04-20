@@ -1,0 +1,17 @@
+name: relay Dev
+version: 1.2.0
+schema: v1
+
+models:
+  - name: Relay 1.2
+    provider: openai
+    model: relay-v1.2
+    apiBase: http://127.0.0.1:5001/v1
+    apiKey: not-needed
+    contextLength: 1000000
+    roles:
+      - chat
+      - edit
+      - apply
+    requestOptions:
+      timeout: 300000

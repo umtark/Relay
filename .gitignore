@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# VS Code
+.vscode/
+
+# Chrome profiles (büyük, kişiye özel)
+chrome_profile/
+chrome_profile_gemini/
+
+# Build outputs
+build/
+dist/
+*.spec
+
+# Data & downloads (kişiye özel)
+ai_data/
+whatsapp_downloads/
+Headless_output/
+output/
+memory/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Büyük model dosyaları
+*.bin
+*.pt
+*.onnx
+*.safetensors
+hubert_models/
+silero_models/
+piper_models/
+Bark/
+
+# Paketlenmiş extension (çok büyük, Release'de olacak)
+setup_kit/continue_ext/
+
+# Geçici dosyalar
+*.bak
+*.tmp
+debug_output.txt
+scan_report.json
+*.bak_cleanup
+
+# Driver
+realtek_driver/
+ffmpeg/
+
+# Ses efekt kurulum
+ses_efekt_kurulum/
